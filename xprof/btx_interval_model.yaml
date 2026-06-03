@@ -45,6 +45,11 @@
               :field_class:
                 :type: bool
                 :cast_type: bt_bool
+            - :name: gpu_aware
+              :field_class:
+                :type: integer_signed
+                :field_value_range: 8
+                :cast_type: int8_t
       - :name: lttng:device 
         :payload_field_class:
           :type: structure

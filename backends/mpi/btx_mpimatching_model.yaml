@@ -1,15 +1,65 @@
-# Babeltrace2 interval-matching model for MPI
-# gpu_aware (int8): 1 = at least one buffer pointer resolved to a GPU
-#                       allocation (L0 device/shared, CUDA device/managed,
-#                       HIP device) at call entry time.
-#                   0 = all buffer pointers are host memory (CPU-only call).
----
-:matching:
-  :event_class_name: true
-  :hostname: true
-  :vpid: true
-  :vtid: true
-:interval_fields:
-  :gpu_aware:
-    :type: int8_t
-    :default: 0
+:environment:
+  :entries:
+  - :name: ^hostname$
+    :type: string
+:stream_classes:
+- :default_clock_class: {}
+  :event_common_context_field_class:
+    :type: structure
+    :members:
+    - :name: ^vpid$
+      :field_class:
+        :type: integer_signed
+    - :name: ^vtid$
+      :field_class:
+        :type: integer_unsigned
+  :event_classes:
+  - :set_id: entries
+    :name: "_entry$"
+  - :set_id: exits
+    :register: false
+    :name: "_exit$"
+  - :set_id: exits_mpiError_present
+    :domain: exits
+    :payload_field_class:
+      :type: structure
+      :members:
+      - :name: ^mpiResult$
+        :field_class:
+          :type: integer_signed
+          :cast_type: ^int$
+  - :set_id: exits_mpiError_absent
+    :domain: exits - exits_mpiError_present
+  - :set_id: traffic_MPI_Count_entry
+    :domain: entries
+    :payload_field_class:
+      :type: structure
+      :members:
+      - :name: ^(count|origin_count)$
+        :field_class:
+          :cast_type: ^MPI_Count$
+      - :name: ^(datatype|origin_count)$
+        :field_class:
+          :cast_type: MPI_Datatype
+  - :set_id: traffic_int_entry
+    :domain: entries
+    :payload_field_class:
+      :type: structure
+      :members:
+      - :name: ^(count|origin_count)$
+        :field_class:
+          :cast_type: ^int$
+      - :name: ^(datatype|origin_count)$
+        :field_class:
+          :cast_type: MPI_Datatype
+  # Subset of entries whose first buffer argument is a const void * pointer.
+  # Used to classify GPU-aware vs CPU-only MPI calls at entry time, before
+  # the actual MPI operation executes (pointer is live at this point).
+  - :set_id: entries_buf_ptr
+    :domain: entries
+    :payload_field_class:
+      :type: structure
+      :members:
+      - :name: ^(sendbuf|recvbuf|buf|buffer|origin_addr)$
+        :field_class:
+          :cast_type: ^const void \*$
