@@ -1,89 +1,39 @@
 require_relative 'gen_mpi_library_base'
 
-def print_enum(name, enum)
-  print_enum_with_namespace(:MPI, name, enum)
-end
+# Buffer-bearing parameter names that indicate a primary data buffer.
+# When any of these appear in a function's parameter list, the generated
+# wrapper will call thapi_is_gpu_aware_ptr() on the first one found and
+# emit the result as a synthetic `gpu_aware` field in the LTTng tracepoint.
+GPU_AWARE_BUF_PARAMS = %w[
+  buf sendbuf recvbuf buffer origin_addr result_addr compare_addr
+  inbuf outbuf base baseptr
+].freeze
 
-def print_mpi_object(object)
-  print_object(object)
-end
+class MPILibrary < MPILibraryBase
 
-print_ffi_module(:MPI)
+  # Returns the name of the first buffer parameter for the given function,
+  # or nil if the function does not operate on a data buffer.
+  def gpu_aware_buf_param(function)
+    function.parameters.find do |p|
+      GPU_AWARE_BUF_PARAMS.include?(p.name.to_s)
+    end&.name
+  end
 
-puts <<~EOF
-  module MPI
-    extend FFI::Library
-
-    module Handle
-      def to_s
-        s = '{ reserved: "'
-        s << self[:reserved].to_a.collect { |v| "\\\\x%02x" % ((v + 256)%256) }.join
-        s << '" }'
+  def generate_wrapper(function)
+    buf_param = gpu_aware_buf_param(function)
+    super(function) do |f|
+      if buf_param
+        # Classify pointer at entry and store in thread-local for the
+        # exit tracepoint to pick up via entries_gpu_aware_callback.
+        <<~C
+          /* GPU-aware classification: classify #{buf_param} */
+          int8_t _gpu_aware = (int8_t)thapi_is_gpu_aware_ptr(
+              (const void *)(uintptr_t)#{buf_param});
+          tracepoint(lttng_ust_mpi, #{f.name}_entry_gpu_aware,
+                     #{f.parameters.map(&:name).join(', ')}, _gpu_aware);
+        C
       end
     end
-
-    module UUID
-      def to_s
-        a = self[:bytes].to_a.collect { |v| v < 0 ? 0x100 + v : v }
-        s = "{ id: "
-        s << "%02x" % a[0]
-        s << "%02x" % a[1]
-        s << "%02x" % a[2]
-        s << "%02x" % a[3]
-        s << "-"
-        s << "%02x" % a[4]
-        s << "%02x" % a[5]
-        s << "-"
-        s << "%02x" % a[6]
-        s << "%02x" % a[7]
-        s << "-"
-        s << "%02x" % a[8]
-        s << "%02x" % a[9]
-        s << "-"
-        s << "%02x" % a[10]
-        s << "%02x" % a[11]
-        s << "%02x" % a[12]
-        s << "%02x" % a[13]
-        s << "%02x" % a[14]
-        s << "%02x" % a[15]
-        s << " }"
-      end
-    end
-EOF
-
-def print_union(name, union)
-  print_union_with_namespace(:MPI, name, union)
-end
-
-def print_struct(name, struct)
-  print_struct_with_namespace(:MPI, name, struct)
-end
-
-$all_types.each do |t|
-  if t.type.is_a? YAMLCAst::Enum
-    enum = $all_enums.find { |e| t.type.name == e.name }
-    print_enum(t.name, enum)
-  elsif $objects.include?(t.name)
-    print_mpi_object(t.name)
-  elsif t.type.is_a? YAMLCAst::Struct
-    struct = $all_structs.find { |s| t.type.name == s.name }
-    next unless struct
-
-    print_struct(t.name, struct)
-  elsif t.type.is_a? YAMLCAst::Union
-    union = $all_unions.find { |s| t.type.name == s.name }
-    next unless union
-
-    print_union(t.name, union)
-  elsif t.type.is_a?(YAMLCAst::Pointer) && t.type.type.is_a?(YAMLCAst::Function)
-    print_function_pointer_type(t.name, t.type.type)
-  elsif t.type.is_a?(YAMLCAst::Pointer)
-    print_pointer_type(t.name)
-  elsif t.type.is_a?(YAMLCAst::Int)
-    print_int_type(t.name, t.type.name)
   end
-end
 
-puts <<~EOF
-  end
-EOF
+end
